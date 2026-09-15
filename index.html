@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SMRTTECH Lab ZIP Reader</title>
+    <link rel="icon" type="image/png" href="assets/smrttech-crest-favicon.png">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="assets/css/site.css">
+</head>
+<body class="autograder-page" data-lab-autograder>
+    <header class="autograder-shell autograder-header">
+        <div class="autograder-header-grid">
+            <div>
+                <p class="autograder-eyebrow">SMRTTECH 3CC3 + 3DE3 · Local browser utility</p>
+                <h1>SMRTTECH Lab ZIP Reader</h1>
+                <p class="autograder-intro">Open exported lab submission ZIP packages or standalone completion JSON files, inspect their contents, and generate grading reports.</p>
+            </div>
+            <img src="assets/McMaster-logo.png" alt="McMaster University logo" class="autograder-logo">
+        </div>
+    </header>
+
+    <main class="autograder-shell">
+        <section class="autograder-notice-grid" aria-label="Privacy and integrity notices">
+            <article class="autograder-notice">
+                <h2>Local processing</h2>
+                <p>This tool runs locally in your browser. Uploaded completion files are not sent to a server by this page.</p>
+            </article>
+            <article class="autograder-notice">
+                <h2>Integrity context</h2>
+                <p>Client-side export hashes help detect changes after export but do not make a file tamper-proof.</p>
+            </article>
+        </section>
+
+        <section class="autograder-upload-card" aria-labelledby="upload-title">
+            <div>
+                <p class="autograder-eyebrow">Completion packages</p>
+                <h2 id="upload-title">Upload submission ZIP or completion JSON</h2>
+                    <p>ZIP packages are opened locally to read <code>completion.json</code> and list the included evidence. Both the <code>3cc3-lab-completion-v1</code> and <code>3de3-lab-completion-v1</code> schemas are supported.</p>
+            </div>
+            <label class="autograder-dropzone" data-autograder-dropzone for="completion-files">
+                <span class="autograder-dropzone-title">Drop ZIP or JSON files here</span>
+                <span class="autograder-dropzone-copy">or choose submission packages from this computer</span>
+                <span class="utility-button">Choose submission files</span>
+                <input id="completion-files" class="autograder-file-input" type="file" accept="application/zip,application/x-zip-compressed,.zip,application/json,.json" multiple data-autograder-input>
+            </label>
+            <p class="autograder-upload-message" data-autograder-message role="status" aria-live="polite">No files have been uploaded.</p>
+        </section>
+
+        <section class="autograder-batch-actions" aria-label="Batch report downloads">
+            <button class="utility-button" type="button" data-download-gradebook disabled>Download Gradebook CSV</button>
+            <button class="utility-button" type="button" data-download-summary disabled>Download Detailed JSON Report</button>
+            <button class="utility-button" type="button" data-clear-results disabled>Clear uploaded reports</button>
+        </section>
+
+        <section class="autograder-results" aria-labelledby="results-title">
+            <div class="autograder-results-heading">
+                <div>
+                    <p class="autograder-eyebrow">ZIP reader workspace</p>
+                    <h2 id="results-title">Completion reports</h2>
+                </div>
+            </div>
+            <div data-autograder-results></div>
+        </section>
+    </main>
+
+    <script src="assets/js/lab-grading-rules.js"></script>
+    <script src="assets/js/lab-autograder.js"></script>
+    <script src="assets/js/link-targets.js"></script>
+</body>
+</html>
