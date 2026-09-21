@@ -26,6 +26,38 @@
         return Math.round((Number(value) || 0) * 100) / 100;
     }
 
+    function labNumber(data) {
+        const rawValue = data?.lab?.lab_number ?? data?.lab?.number;
+        if (rawValue === null || rawValue === undefined || rawValue === '') return NaN;
+        const value = Number(rawValue);
+        return Number.isInteger(value) && value >= 1 ? value : NaN;
+    }
+
+    function completionPercent(data) {
+        const exportedPercent = data?.lab?.completion_percent;
+        if (exportedPercent !== null && exportedPercent !== undefined && exportedPercent !== '' && Number.isFinite(Number(exportedPercent))) {
+            return round(exportedPercent);
+        }
+        const completed = Number(data?.completion?.completed_stages);
+        const total = Number(data?.completion?.total_stages);
+        return Number.isFinite(completed) && Number.isFinite(total) && total > 0
+            ? round((completed / total) * 100)
+            : null;
+    }
+
+    function normalizedLab(data) {
+        if (!data?.lab || typeof data.lab !== 'object') return {};
+        const number = labNumber(data);
+        return {
+            ...data.lab,
+            lab_number: Number.isFinite(number) ? number : (data.lab.lab_number ?? data.lab.number),
+            lab_title: data.lab.lab_title || data.lab.title,
+            completion_status: data.lab.completion_status || data.completion?.status || (data.completion?.complete === true ? 'complete' : 'incomplete'),
+            completion_percent: completionPercent(data),
+            export_generated_at: data.lab.export_generated_at || data.generated_at || ''
+        };
+    }
+
     function hasValue(value) {
         if (typeof value === 'number') return Number.isFinite(value);
         if (typeof value === 'boolean') return value;
@@ -79,7 +111,7 @@
         const is3de3 = data.schema_version === '3de3-lab-completion-v1';
         if (!SUPPORTED_SCHEMAS.has(data.schema_version)) errors.push('Unsupported schema version. Expected a 3CC3 or 3DE3 lab completion export.');
         if (!data.lab || typeof data.lab !== 'object') errors.push('Lab metadata is missing.');
-        if (!Number.isInteger(Number(data.lab?.lab_number)) || Number(data.lab?.lab_number) < 1) errors.push('Lab number is missing or invalid.');
+        if (!Number.isFinite(labNumber(data))) errors.push('Lab number is missing or invalid.');
         if (!text(data.lab?.lab_title || data.lab?.title)) errors.push('Lab title is missing.');
         if (!data.student || typeof data.student !== 'object') errors.push('Student metadata is missing.');
         if (!is3de3 && (!data.grading_summary || typeof data.grading_summary !== 'object')) errors.push('Grading summary is missing.');
@@ -229,7 +261,7 @@
         const complete = data.schema_version === '3de3-lab-completion-v1'
             ? data.completion?.complete === true
             : data.lab?.completion_status === 'complete' && asArray(summary.missing_required_checkpoints).length === 0;
-        const finalReady = finalCheckpoint?.status === 'complete';
+        const finalReady = finalCheckpoint?.complete === true || finalCheckpoint?.status === 'complete';
         const hashPresent = integrity.status === 'matched' || integrity.status === 'not_present' ? Boolean(text(data.export_hash)) : integrity.status === 'not_verified';
         const parts = [identity, complete, finalReady, hashPresent];
         const score = category.points * (parts.filter(Boolean).length / parts.length);
@@ -343,7 +375,7 @@
     }
 
     function baseOverrideKey(data, fileName) {
-        const lab = data.lab?.lab_number || 'unknown';
+        const lab = labNumber(data) || 'unknown';
         const student = data.student?.student_numbers || data.student?.name_or_team || fileName || 'unknown';
         return `${lab}:${safeFilenamePart(student)}`;
     }
@@ -359,10 +391,10 @@
     async function gradeCompletion(data, options = {}) {
         const validation = validateCompletion(data);
         const integrity = await verifyExportHash(data || {});
-        const labNumber = Number(data?.lab?.lab_number);
+        const currentLabNumber = labNumber(data);
         const rules = data?.schema_version === '3de3-lab-completion-v1'
             ? globalThis.LAB_GRADING_RULES?.generic
-            : globalThis.LAB_GRADING_RULES?.[labNumber] || globalThis.LAB_GRADING_RULES?.generic;
+            : globalThis.LAB_GRADING_RULES?.[currentLabNumber] || globalThis.LAB_GRADING_RULES?.generic;
         const categories = validation.valid && rules
             ? rules.categories.map(category => scoreCategory(category, data, integrity))
             : [];
@@ -380,7 +412,7 @@
             source_data: data,
             schema_validation: validation,
             integrity,
-            lab: data?.lab ? { ...data.lab, lab_number: data.lab.lab_number ?? data.lab.number, lab_title: data.lab.lab_title || data.lab.title } : {},
+            lab: normalizedLab(data),
             student: data?.student ? { ...data.student, name_or_team: data.student.name_or_team || data.student.student_names, instructor_or_ta: data.student.instructor_or_ta || data.student.instructor } : {},
             grading_rule_set: rules?.id || 'unavailable',
             generic_rules_applied: Boolean(rules?.generic),
@@ -535,7 +567,7 @@
             const row = document.createElement('tr');
             appendCell(row, checkpoint.title || checkpoint.id);
             appendCell(row, checkpoint.required ? 'Yes' : 'No');
-            appendCell(row, checkpoint.status || 'not_started');
+            appendCell(row, checkpoint.status || (checkpoint.complete === true ? 'complete' : 'not_started'));
             appendCell(row, formatDate(checkpoint.completed_at));
             appendCell(row, String(asArray(checkpoint.responses).length));
             const problems = asArray(checkpoint.responses).filter(response => ['warning', 'fail'].includes(response.validation?.status)).length;
@@ -686,6 +718,9 @@
         if (report.generic_rules_applied) card.append(createElement('p', 'autograder-rule-note', 'Generic grading rules applied. Instructor should confirm the final rubric.'));
         if (!report.schema_validation.valid) card.append(createElement('p', 'autograder-alert is-high', report.schema_validation.errors.join(' ')));
         else if (report.integrity.status === 'mismatch') card.append(createElement('p', 'autograder-alert is-high', 'Hash mismatch: review this file before gradebook entry. Client-side hashes are not tamper-proof.'));
+        if (report.status === 'Incomplete') {
+            card.append(createElement('p', 'autograder-alert', text(report.source_data?.package?.incomplete_warning) || 'Partial submission: the student downloaded this package before completing every required lab stage.'));
+        }
 
         const overrides = createElement('div', 'autograder-overrides');
         overrides.append(createElement('h3', '', 'Instructor Override'));
