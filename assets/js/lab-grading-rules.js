@@ -24,8 +24,25 @@
         ]
     };
 
+    const LAB_2_3DE3_RULES = {
+        id: '3de3-lab-2-v2',
+        label: '3DE3 Lab 2 revised completion rubric',
+        lab_title: 'Lab 2: FPGA Logic Design',
+        total_points: 10,
+        categories: [
+            { id: 'completion', label: 'Required checkpoint completion', points: 3, method: 'required_checkpoints_complete' },
+            { id: 'gate_outputs', label: 'NAND, XOR, and XNOR investigation', points: 2, method: 'lab2_gate_outputs' },
+            { id: 'responses', label: 'Remaining responses and measurements', points: 2, method: 'response_presence' },
+            { id: 'validation', label: 'Lab 2 reference and project checks', points: 2, method: 'lab2_validation_quality' },
+            { id: 'reflection_evidence', label: 'Reflection and evidence', points: 1, method: 'reflection_evidence' }
+        ]
+    };
+
     const LAB_GRADING_RULES = {
         generic: GENERIC_RULES,
+        '3de3': {
+            2: LAB_2_3DE3_RULES
+        },
         1: {
             id: 'lab-1-v1',
             label: 'Lab 1 completion rubric',

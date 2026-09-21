@@ -9,6 +9,7 @@ A static browser tool for reading SMRTTECH 3CC3 and 3DE3 lab submission ZIP pack
 - Lists packaged evidence and previews supported images.
 - Produces completion reports, grading summaries, CSV gradebooks, and detailed JSON reports.
 - Recognizes complete and partial lab submissions.
+- Applies the revised 3DE3 Lab 2 rubric for stages 0-9, NAND/XOR/XNOR outputs, board references, project naming, and `.v` evidence.
 
 ## Privacy
 
@@ -21,3 +22,7 @@ Reports assist instructor review; they are not a replacement for human assessmen
 ## GitHub Pages
 
 The site is served directly from the repository's `main` branch root.
+
+## Tests
+
+Run the complete compatibility suite with `npm test`. The tests use Node's built-in test runner and require no installed packages.

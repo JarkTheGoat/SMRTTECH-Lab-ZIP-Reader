@@ -8,6 +8,18 @@
     const MAX_COMPLETION_BYTES = 10 * 1024 * 1024;
     const MAX_PNG_PREVIEW_BYTES = 20 * 1024 * 1024;
     const MAX_TOTAL_PREVIEW_BYTES = 60 * 1024 * 1024;
+    const LAB_2_STAGE_NUMBERS = Object.freeze([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    const LAB_2_GATE_EXPECTATIONS = Object.freeze({
+        'nand-0': '1', 'nand-1': '1', 'nand-2': '1', 'nand-3': '0',
+        'xor-0': '0', 'xor-1': '1', 'xor-2': '1', 'xor-3': '0',
+        'xnor-0': '1', 'xnor-1': '0', 'xnor-2': '0', 'xnor-3': '1'
+    });
+    const LAB_2_IGNORED_RESPONSE_IDS = new Set([
+        'lab2-final-review', 'combinational-analysis',
+        'or-0', 'or-1', 'or-2', 'or-3',
+        'nor-0', 'nor-1', 'nor-2', 'nor-3',
+        ...['or', 'nand', 'nor', 'xor', 'xnor'].flatMap(gate => [0, 1, 2, 3].map(index => `${gate}-led-${index}`))
+    ]);
     const reports = [];
 
     function asArray(value) {
@@ -34,6 +46,11 @@
     }
 
     function completionPercent(data) {
+        if (is3de3Lab2(data)) {
+            const checkpoints = gradedCheckpoints(data);
+            const completed = checkpoints.filter(checkpointComplete).length;
+            return checkpoints.length ? round((completed / LAB_2_STAGE_NUMBERS.length) * 100) : null;
+        }
         const exportedPercent = data?.lab?.completion_percent;
         if (exportedPercent !== null && exportedPercent !== undefined && exportedPercent !== '' && Number.isFinite(Number(exportedPercent))) {
             return round(exportedPercent);
@@ -48,11 +65,12 @@
     function normalizedLab(data) {
         if (!data?.lab || typeof data.lab !== 'object') return {};
         const number = labNumber(data);
+        const complete = isLabComplete(data);
         return {
             ...data.lab,
             lab_number: Number.isFinite(number) ? number : (data.lab.lab_number ?? data.lab.number),
             lab_title: data.lab.lab_title || data.lab.title,
-            completion_status: data.lab.completion_status || data.completion?.status || (data.completion?.complete === true ? 'complete' : 'incomplete'),
+            completion_status: is3de3Lab2(data) ? (complete ? 'complete' : 'incomplete') : (data.lab.completion_status || data.completion?.status || (complete ? 'complete' : 'incomplete')),
             completion_percent: completionPercent(data),
             export_generated_at: data.lab.export_generated_at || data.generated_at || ''
         };
@@ -72,6 +90,37 @@
         return asArray(data?.checkpoints);
     }
 
+    function is3de3Lab2(data) {
+        return data?.schema_version === '3de3-lab-completion-v1' && labNumber(data) === 2;
+    }
+
+    function checkpointStage(checkpoint) {
+        const rawStage = checkpoint?.stage;
+        const explicit = rawStage === null || rawStage === undefined || rawStage === '' ? NaN : Number(rawStage);
+        if (Number.isInteger(explicit)) return explicit;
+        const match = text(checkpoint?.id).match(/^stage-(\d+)$/i);
+        return match ? Number(match[1]) : NaN;
+    }
+
+    function checkpointComplete(checkpoint) {
+        return checkpoint?.complete === true || checkpoint?.status === 'complete';
+    }
+
+    function gradedCheckpoints(data) {
+        const checkpoints = flattenCheckpoints(data);
+        if (!is3de3Lab2(data)) return checkpoints;
+        return checkpoints.filter(checkpoint => LAB_2_STAGE_NUMBERS.includes(checkpointStage(checkpoint)));
+    }
+
+    function isLabComplete(data) {
+        if (is3de3Lab2(data)) {
+            const completedStages = new Set(gradedCheckpoints(data).filter(checkpointComplete).map(checkpointStage));
+            return LAB_2_STAGE_NUMBERS.every(stage => completedStages.has(stage));
+        }
+        if (data?.schema_version === '3de3-lab-completion-v1') return data.completion?.complete === true;
+        return data?.lab?.completion_status === 'complete' && asArray(data?.grading_summary?.missing_required_checkpoints).length === 0;
+    }
+
     function flattenResponses(data) {
         const nested = flattenCheckpoints(data).flatMap(checkpoint =>
             asArray(checkpoint.responses).map(response => ({ checkpoint, response }))
@@ -82,6 +131,20 @@
             checkpoint: checkpoints.find(checkpoint => checkpoint.id === response.checkpoint_id) || { id: 'responses', title: 'Responses' },
             response: { ...response, id: response.id || response.key, value: response.value, label: response.label || response.key }
         }));
+    }
+
+    function responseId(response) {
+        return text(response?.id || response?.key);
+    }
+
+    function gradedResponses(data) {
+        const responses = flattenResponses(data);
+        if (!is3de3Lab2(data)) return responses;
+        return responses.filter(({ response }) => !LAB_2_IGNORED_RESPONSE_IDS.has(responseId(response)));
+    }
+
+    function responseValue(data, id) {
+        return flattenResponses(data).find(({ response }) => responseId(response) === id)?.response?.value;
     }
 
     function flattenChecks(data) {
@@ -102,7 +165,55 @@
         }));
     }
 
-    function validateCompletion(data) {
+    function evidenceFilename(data, key, submissionPackage = null) {
+        const prefix = `evidence/${key.toLowerCase()}-`;
+        const packaged = asArray(submissionPackage?.entries).find(entry => text(entry.name).toLowerCase().replace(/\\/g, '/').startsWith(prefix));
+        if (packaged) return text(packaged.name).replace(/\\/g, '/').split('/').pop().slice(key.length + 1);
+        const record = flattenEvidence(data).find(({ evidence }) => text(evidence.id || evidence.key) === key)?.evidence;
+        return text(record?.filename);
+    }
+
+    function lab2CompatibilityChecks(data, submissionPackage = null) {
+        const logicElements = text(responseValue(data, 'board-logic-elements'));
+        const sensor = text(responseValue(data, 'board-sensor'));
+        const projectName = text(responseValue(data, 'quartus-project-name'));
+        const verilogFilename = evidenceFilename(data, 'verilog-file', submissionPackage);
+        const sensorNamesDevice = /adxl\s*-?\s*345/i.test(sensor);
+        const sensorDescribesPurpose = /(three|3)[\s-]*axis|acceler|\bx\b.*\by\b.*\bz\b|motion|orientation|tilt|gravity/i.test(sensor);
+        return [
+            {
+                id: 'board-logic-elements',
+                valid: logicElements.replace(/\D/g, '') === '22320',
+                message: 'Logic Elements must identify 22,320 logic elements (22320 and 22,320 are both accepted).'
+            },
+            {
+                id: 'board-sensor',
+                valid: sensorNamesDevice && sensorDescribesPurpose,
+                message: 'On-board sensor must identify the ADXL345 three-axis accelerometer and describe acceleration, X/Y/Z axes, motion, orientation, tilt, or gravity.'
+            },
+            {
+                id: 'quartus-project-name',
+                valid: projectName.replace(/\s+/g, '').toLowerCase() === 'lab2',
+                message: 'Quartus project name and top-level entity should be Lab2; capitalization differences are accepted.'
+            },
+            {
+                id: 'verilog-file',
+                valid: Boolean(verilogFilename) && /\.v$/i.test(verilogFilename),
+                message: 'The uploaded Verilog design filename must end in .v.',
+                filename: verilogFilename
+            }
+        ];
+    }
+
+    function validateLab2Compatibility(data, submissionPackage, errors) {
+        const stages = new Set(gradedCheckpoints(data).map(checkpointStage));
+        const missingStages = LAB_2_STAGE_NUMBERS.filter(stage => !stages.has(stage));
+        if (missingStages.length) errors.push(`Lab 2 checkpoint data must contain stages 0 through 9. Missing: ${missingStages.join(', ')}.`);
+        const verilogCheck = lab2CompatibilityChecks(data, submissionPackage).find(check => check.id === 'verilog-file');
+        if (verilogCheck.filename && !verilogCheck.valid) errors.push(`${verilogCheck.message} Received: ${verilogCheck.filename}.`);
+    }
+
+    function validateCompletion(data, options = {}) {
         const errors = [];
         const warnings = [];
         if (!data || typeof data !== 'object' || Array.isArray(data)) {
@@ -124,6 +235,8 @@
             if (!Number.isFinite(Number(data.grading_summary?.completed_required_checkpoints))) errors.push('Completed required checkpoint count is missing.');
             if (!Array.isArray(data.grading_summary?.missing_required_checkpoints)) errors.push('Missing required checkpoint list is missing.');
         }
+
+        if (is3de3Lab2(data) && Array.isArray(data.checkpoints)) validateLab2Compatibility(data, options.submission_package, errors);
 
         if (!text(data.student?.name_or_team || data.student?.student_names)) warnings.push('Student or team identity is missing.');
         if (!text(data.student?.student_numbers) && !text(data.student?.group_number)) warnings.push('Student number(s) or group number is missing.');
@@ -178,8 +291,8 @@
     function scoreCompletion(category, data) {
         const summary = data.grading_summary || {};
         if (data.schema_version === '3de3-lab-completion-v1') {
-            const required = flattenCheckpoints(data).filter(checkpoint => checkpoint.required !== false);
-            const completed = required.filter(checkpoint => checkpoint.complete === true || checkpoint.status === 'complete').length;
+            const required = gradedCheckpoints(data).filter(checkpoint => checkpoint.required !== false);
+            const completed = required.filter(checkpointComplete).length;
             return categoryResult(category, category.points * (required.length ? completed / required.length : 0), `${completed}/${required.length} required checkpoints are complete.`, { completed, total: required.length });
         }
         const total = Number(summary.total_required_checkpoints);
@@ -214,7 +327,7 @@
 
     function scoreResponsePresence(category, data) {
         const responseIds = asArray(category.response_ids);
-        let candidates = flattenResponses(data).filter(({ response }) => !['checkbox', 'choice'].includes(response.type));
+        let candidates = gradedResponses(data).filter(({ response }) => !['checkbox', 'choice'].includes(response.type));
         if (responseIds.length) {
             candidates = responseIds.map(id => candidates.find(item => item.response.id === id) || {
                 checkpoint: { id: 'unrecorded', title: 'Unrecorded response' },
@@ -238,7 +351,7 @@
     }
 
     function scoreValidation(category, data, integrity) {
-        const responses = flattenResponses(data).map(item => item.response);
+        const responses = gradedResponses(data).map(item => item.response);
         const flags = asArray(data.grading_summary?.potential_mark_loss_flags);
         const fails = responses.filter(response => response.validation?.status === 'fail').length;
         const warnings = responses.filter(response => response.validation?.status === 'warning').length;
@@ -252,16 +365,37 @@
         return categoryResult(category, score, explanation, { fails, warnings, high_flags: highFlags, warning_flags: warningFlags });
     }
 
+    function scoreLab2GateOutputs(category, data) {
+        const results = Object.entries(LAB_2_GATE_EXPECTATIONS).map(([id, expected]) => {
+            const actual = text(responseValue(data, id));
+            return { id, expected, actual, correct: actual === expected };
+        });
+        const correct = results.filter(result => result.correct).length;
+        return categoryResult(category, category.points * (correct / results.length), `${correct}/${results.length} required NAND, XOR, and XNOR F outputs are correct.`, {
+            correct,
+            total: results.length,
+            results
+        });
+    }
+
+    function scoreLab2Validation(category, data) {
+        const checks = lab2CompatibilityChecks(data);
+        const passed = checks.filter(check => check.valid).length;
+        return categoryResult(category, category.points * (passed / checks.length), `${passed}/${checks.length} Lab 2 reference, project-name, and Verilog-file checks passed.`, {
+            passed,
+            total: checks.length,
+            checks
+        });
+    }
+
     function scoreSubmissionReadiness(category, data, integrity) {
         const summary = data.grading_summary || {};
         const student = data.student || {};
-        const required = flattenCheckpoints(data).filter(checkpoint => checkpoint.required);
+        const required = gradedCheckpoints(data).filter(checkpoint => checkpoint.required);
         const finalCheckpoint = required.at(-1);
         const identity = Boolean(text(student.name_or_team || student.student_names) && (text(student.student_numbers) || text(student.group_number)));
-        const complete = data.schema_version === '3de3-lab-completion-v1'
-            ? data.completion?.complete === true
-            : data.lab?.completion_status === 'complete' && asArray(summary.missing_required_checkpoints).length === 0;
-        const finalReady = finalCheckpoint?.complete === true || finalCheckpoint?.status === 'complete';
+        const complete = isLabComplete(data);
+        const finalReady = checkpointComplete(finalCheckpoint);
         const hashPresent = integrity.status === 'matched' || integrity.status === 'not_present' ? Boolean(text(data.export_hash)) : integrity.status === 'not_verified';
         const parts = [identity, complete, finalReady, hashPresent];
         const score = category.points * (parts.filter(Boolean).length / parts.length);
@@ -289,6 +423,8 @@
     function scoreCategory(category, data, integrity) {
         if (category.method === 'required_checkpoints_complete') return scoreCompletion(category, data);
         if (category.method === 'knowledge_check_pass_rate' || category.method === 'auto_check_pass_rate') return scoreAutoChecks(category, data);
+        if (category.method === 'lab2_gate_outputs') return scoreLab2GateOutputs(category, data);
+        if (category.method === 'lab2_validation_quality') return scoreLab2Validation(category, data);
         if (category.method === 'required_response_presence' || category.method === 'response_presence') return scoreResponsePresence(category, data);
         if (category.method === 'validation_statuses' || category.method === 'validation_quality') return scoreValidation(category, data, integrity);
         if (category.method === 'final_checkpoint_completion' || category.method === 'submission_readiness') return scoreSubmissionReadiness(category, data, integrity);
@@ -308,6 +444,24 @@
         if (integrity.status === 'mismatch') addReviewItem(items, { category: 'semi_automatic', severity: 'high', type: 'hash_mismatch', message: integrity.message });
         if (integrity.status === 'not_verified') addReviewItem(items, { category: 'semi_automatic', severity: 'warning', type: 'hash_not_verified', message: integrity.message });
 
+        if (is3de3Lab2(data)) {
+            lab2CompatibilityChecks(data).filter(check => !check.valid).forEach(check => {
+                addReviewItem(items, {
+                    category: 'semi_automatic', severity: 'warning', type: 'lab2_compatibility', field_id: check.id,
+                    message: check.message
+                });
+            });
+            Object.entries(LAB_2_GATE_EXPECTATIONS).forEach(([id, expected]) => {
+                const actual = text(responseValue(data, id));
+                if (actual !== expected) {
+                    addReviewItem(items, {
+                        category: 'semi_automatic', severity: 'warning', type: 'lab2_gate_output', field_id: id,
+                        message: `${id.toUpperCase()} should be ${expected}; received ${actual || 'no response'}.`
+                    });
+                }
+            });
+        }
+
         asArray(data.grading_summary?.potential_mark_loss_flags).forEach(flag => {
             addReviewItem(items, {
                 category: 'semi_automatic',
@@ -319,14 +473,14 @@
             });
         });
 
-        flattenCheckpoints(data).filter(checkpoint => checkpoint.required !== false && checkpoint.complete !== true && checkpoint.status !== 'complete').forEach(checkpoint => {
+        gradedCheckpoints(data).filter(checkpoint => checkpoint.required !== false && !checkpointComplete(checkpoint)).forEach(checkpoint => {
             addReviewItem(items, {
                 category: 'semi_automatic', severity: 'warning', type: 'incomplete_checkpoint', checkpoint_id: checkpoint.id,
                 message: `Required checkpoint is incomplete: ${checkpoint.title || checkpoint.id}.`
             });
         });
 
-        flattenResponses(data).forEach(({ checkpoint, response }) => {
+        gradedResponses(data).forEach(({ checkpoint, response }) => {
             const validationStatus = response.validation?.status;
             if (validationStatus === 'not_checked') {
                 addReviewItem(items, {
@@ -369,7 +523,7 @@
     function reportStatus(data, validation, integrity, reviewItems) {
         if (!validation.valid) return 'Invalid file';
         if (integrity.status === 'mismatch') return 'Hash mismatch';
-        if ((data.schema_version === '3de3-lab-completion-v1' && data.completion?.complete !== true) || (data.schema_version !== '3de3-lab-completion-v1' && (data.lab?.completion_status !== 'complete' || asArray(data.grading_summary?.missing_required_checkpoints).length))) return 'Incomplete';
+        if (!isLabComplete(data)) return 'Incomplete';
         if (reviewItems.length) return 'Instructor review needed';
         return 'Ready for gradebook';
     }
@@ -389,11 +543,11 @@
     }
 
     async function gradeCompletion(data, options = {}) {
-        const validation = validateCompletion(data);
+        const validation = validateCompletion(data, options);
         const integrity = await verifyExportHash(data || {});
         const currentLabNumber = labNumber(data);
         const rules = data?.schema_version === '3de3-lab-completion-v1'
-            ? globalThis.LAB_GRADING_RULES?.generic
+            ? globalThis.LAB_GRADING_RULES?.['3de3']?.[currentLabNumber] || globalThis.LAB_GRADING_RULES?.generic
             : globalThis.LAB_GRADING_RULES?.[currentLabNumber] || globalThis.LAB_GRADING_RULES?.generic;
         const categories = validation.valid && rules
             ? rules.categories.map(category => scoreCategory(category, data, integrity))
@@ -563,7 +717,7 @@
     }
 
     function renderCheckpoints(report) {
-        const rows = flattenCheckpoints(report.source_data).map(checkpoint => {
+        const rows = gradedCheckpoints(report.source_data).map(checkpoint => {
             const row = document.createElement('tr');
             appendCell(row, checkpoint.title || checkpoint.id);
             appendCell(row, checkpoint.required ? 'Yes' : 'No');
@@ -591,7 +745,7 @@
     }
 
     function instructorTextResponses(data) {
-        return flattenResponses(data).filter(({ response }) => response.type === 'text');
+        return gradedResponses(data).filter(({ response }) => response.type === 'text');
     }
 
     function renderInstructorTextResponses(report) {
@@ -611,7 +765,7 @@
     }
 
     function renderResponses(report) {
-        const rows = flattenResponses(report.source_data).map(({ checkpoint, response }) => {
+        const rows = gradedResponses(report.source_data).map(({ checkpoint, response }) => {
             const row = document.createElement('tr');
             appendCell(row, checkpoint.title || checkpoint.id);
             appendCell(row, response.label || response.id);
