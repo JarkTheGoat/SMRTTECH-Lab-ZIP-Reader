@@ -8,7 +8,8 @@
     const MAX_COMPLETION_BYTES = 10 * 1024 * 1024;
     const MAX_PNG_PREVIEW_BYTES = 20 * 1024 * 1024;
     const MAX_TOTAL_PREVIEW_BYTES = 60 * 1024 * 1024;
-    const LAB_2_STAGE_NUMBERS = Object.freeze([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    // Lab 2 stage 10 is an optional export-only UI stage. Only stages 0-9 are graded.
+    const LAB_2_GRADED_STAGE_NUMBERS = Object.freeze([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
     const LAB_2_GATE_EXPECTATIONS = Object.freeze({
         'nand-0': '1', 'nand-1': '1', 'nand-2': '1', 'nand-3': '0',
         'xor-0': '0', 'xor-1': '1', 'xor-2': '1', 'xor-3': '0',
@@ -49,7 +50,7 @@
         if (is3de3Lab2(data)) {
             const checkpoints = gradedCheckpoints(data);
             const completed = checkpoints.filter(checkpointComplete).length;
-            return checkpoints.length ? round((completed / LAB_2_STAGE_NUMBERS.length) * 100) : null;
+            return checkpoints.length ? round((completed / LAB_2_GRADED_STAGE_NUMBERS.length) * 100) : null;
         }
         const exportedPercent = data?.lab?.completion_percent;
         if (exportedPercent !== null && exportedPercent !== undefined && exportedPercent !== '' && Number.isFinite(Number(exportedPercent))) {
@@ -109,13 +110,13 @@
     function gradedCheckpoints(data) {
         const checkpoints = flattenCheckpoints(data);
         if (!is3de3Lab2(data)) return checkpoints;
-        return checkpoints.filter(checkpoint => LAB_2_STAGE_NUMBERS.includes(checkpointStage(checkpoint)));
+        return checkpoints.filter(checkpoint => LAB_2_GRADED_STAGE_NUMBERS.includes(checkpointStage(checkpoint)));
     }
 
     function isLabComplete(data) {
         if (is3de3Lab2(data)) {
             const completedStages = new Set(gradedCheckpoints(data).filter(checkpointComplete).map(checkpointStage));
-            return LAB_2_STAGE_NUMBERS.every(stage => completedStages.has(stage));
+            return LAB_2_GRADED_STAGE_NUMBERS.every(stage => completedStages.has(stage));
         }
         if (data?.schema_version === '3de3-lab-completion-v1') return data.completion?.complete === true;
         return data?.lab?.completion_status === 'complete' && asArray(data?.grading_summary?.missing_required_checkpoints).length === 0;
@@ -207,7 +208,7 @@
 
     function validateLab2Compatibility(data, submissionPackage, errors) {
         const stages = new Set(gradedCheckpoints(data).map(checkpointStage));
-        const missingStages = LAB_2_STAGE_NUMBERS.filter(stage => !stages.has(stage));
+        const missingStages = LAB_2_GRADED_STAGE_NUMBERS.filter(stage => !stages.has(stage));
         if (missingStages.length) errors.push(`Lab 2 checkpoint data must contain stages 0 through 9. Missing: ${missingStages.join(', ')}.`);
         const verilogCheck = lab2CompatibilityChecks(data, submissionPackage).find(check => check.id === 'verilog-file');
         if (verilogCheck.filename && !verilogCheck.valid) errors.push(`${verilogCheck.message} Received: ${verilogCheck.filename}.`);

@@ -86,7 +86,7 @@ test('blank or absent combinational-analysis is optional and does not affect res
     assert.equal(blankReport.review_items.some(item => item.field_id === 'combinational-analysis'), false);
 });
 
-test('ignores legacy stage 10, final review, OR/NOR fields, and every LED-status field', async () => {
+test('treats stage 10 as optional export-only UI metadata and ignores obsolete response fields', async () => {
     const baseline = await autograder.gradeCompletion(validLab2());
     const legacyResponses = [
         response('lab2-final-review', false),
@@ -105,6 +105,39 @@ test('ignores legacy stage 10, final review, OR/NOR fields, and every LED-status
     assert.equal(report.lab.completion_percent, 100);
     assert.equal(report.autograded_score, baseline.autograded_score);
     assert.equal(report.review_items.some(item => legacyResponses.some(responseItem => responseItem.key === item.field_id)), false);
+});
+
+test('does not require stage 10 or top-level complete/status flags when graded stages 0-9 are complete', async () => {
+    const data = validLab2({
+        completion: { completed_stages: 10, total_stages: 10 }
+    });
+    const report = await autograder.gradeCompletion(data);
+
+    assert.equal(data.checkpoints.some(checkpoint => checkpoint.stage === 10), false);
+    assert.equal(report.schema_validation.valid, true);
+    assert.equal(report.status, 'Ready for gradebook');
+    assert.equal(report.lab.completion_status, 'complete');
+    assert.equal(report.lab.completion_percent, 100);
+    assert.deepEqual(report.categories.find(category => category.id === 'completion').details, { completed: 10, total: 10 });
+});
+
+test('marks the ZIP partial when a graded stage is incomplete even if stage 10 and exported completion flags say complete', async () => {
+    const data = validLab2({
+        checkpoints: [
+            ...validLab2().checkpoints.map(checkpoint => checkpoint.stage === 8 ? { ...checkpoint, complete: false } : checkpoint),
+            { id: 'stage-10', stage: 10, title: 'Completion', required: false, complete: true }
+        ],
+        completion: { complete: true, status: 'complete', completed_stages: 11, total_stages: 11 }
+    });
+    const report = await autograder.gradeCompletion(data);
+
+    assert.equal(report.schema_validation.valid, true);
+    assert.equal(report.status, 'Incomplete');
+    assert.equal(report.lab.completion_status, 'incomplete');
+    assert.equal(report.lab.completion_percent, 90);
+    assert.deepEqual(report.categories.find(category => category.id === 'completion').details, { completed: 9, total: 10 });
+    assert.equal(report.review_items.some(item => item.checkpoint_id === 'stage-10'), false);
+    assert.equal(report.review_items.some(item => item.checkpoint_id === 'stage-8'), true);
 });
 
 test('accepts any student-selected .v filename case-insensitively', async () => {
