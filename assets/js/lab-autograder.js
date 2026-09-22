@@ -6,6 +6,7 @@
     const MAX_ARCHIVE_BYTES = 250 * 1024 * 1024;
     const MAX_ARCHIVE_ENTRIES = 500;
     const MAX_COMPLETION_BYTES = 10 * 1024 * 1024;
+    const MAX_VERILOG_SOURCE_BYTES = 2 * 1024 * 1024;
     const MAX_PNG_PREVIEW_BYTES = 20 * 1024 * 1024;
     const MAX_TOTAL_PREVIEW_BYTES = 60 * 1024 * 1024;
     // Lab 2 stage 10 is an optional export-only UI stage. Only stages 0-9 are graded.
@@ -15,6 +16,8 @@
         'xor-0': '0', 'xor-1': '1', 'xor-2': '1', 'xor-3': '0',
         'xnor-0': '1', 'xnor-1': '0', 'xnor-2': '0', 'xnor-3': '1'
     });
+    const LAB_2_VERILOG_DIP_IDS = Object.freeze(['verilog-dip-00', 'verilog-dip-01', 'verilog-dip-10', 'verilog-dip-11']);
+    const LAB_2_VERILOG_OUTPUTS = Object.freeze(['LED0', 'LED1', 'LED2', 'LED3', 'LED4', 'LED5', 'LED6', 'LED7']);
     const LAB_2_IGNORED_RESPONSE_IDS = new Set([
         'lab2-final-review', 'combinational-analysis',
         'or-0', 'or-1', 'or-2', 'or-3',
@@ -174,14 +177,97 @@
         return text(record?.filename);
     }
 
+    function evidenceProvided(data, key, submissionPackage = null) {
+        const filename = evidenceFilename(data, key, submissionPackage);
+        const record = flattenEvidence(data).find(({ evidence }) => text(evidence.id || evidence.key) === key)?.evidence;
+        return Boolean(filename && (record ? record.provided !== false && record.valid !== false : true));
+    }
+
+    function packagedEvidenceEntry(submissionPackage, key) {
+        const prefix = `evidence/${key.toLowerCase()}-`;
+        return asArray(submissionPackage?.entries).find(entry => text(entry.name).toLowerCase().replace(/\\/g, '/').startsWith(prefix));
+    }
+
+    function stripVerilogComments(source) {
+        return String(source || '').replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\r\n]*/g, ' ');
+    }
+
+    function declarationContains(source, direction, identifier) {
+        const pattern = new RegExp(`\\b${direction}\\b([\\s\\S]*?)(?=\\b(?:input|output|inout)\\b|[;)])`, 'gi');
+        const identifierPattern = new RegExp(`\\b${identifier}\\b`);
+        let match;
+        while ((match = pattern.exec(source))) {
+            if (identifierPattern.test(match[1])) return true;
+        }
+        return false;
+    }
+
+    function outputHasLogic(source, output) {
+        const escaped = output.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const direct = new RegExp(`(?:\\bassign\\s+)?\\b${escaped}\\b\\s*(?:<=|=)`, 'i');
+        const primitive = new RegExp(`\\b(?:and|or|not|nand|nor|xor|xnor|buf)\\b(?:\\s+[A-Za-z_$][\\w$]*)?\\s*\\(\\s*${escaped}\\b`, 'i');
+        const concatenations = [...source.matchAll(/\bassign\s*\{([^}]*)\}\s*=/gi)];
+        return direct.test(source) || primitive.test(source) || concatenations.some(match => new RegExp(`\\b${escaped}\\b`).test(match[1]));
+    }
+
+    function lab2VerilogChecks(data, submissionPackage = null) {
+        const filename = evidenceFilename(data, 'verilog-file', submissionPackage);
+        const packaged = packagedEvidenceEntry(submissionPackage, 'verilog-file');
+        const source = typeof packaged?.source_text === 'string' ? stripVerilogComments(packaged.source_text) : '';
+        const expectedModule = filename.replace(/\.v$/i, '');
+        const moduleMatch = source.match(/\bmodule\s+([A-Za-z_$][\w$]*)\b/i);
+        const checks = [
+            {
+                id: 'verilog-file',
+                valid: Boolean(filename) && /\.v$/i.test(filename),
+                message: 'The uploaded Verilog design filename must end in .v.',
+                filename
+            }
+        ];
+        if (!filename || !/\.v$/i.test(filename)) return checks;
+        checks.push({
+            id: 'verilog-source-readable',
+            valid: Boolean(source),
+            message: 'The packaged .v source could not be read. Upload the complete ZIP rather than completion.json by itself.'
+        });
+        if (!source) return checks;
+        checks.push({
+            id: 'verilog-module-name',
+            valid: moduleMatch?.[1] === expectedModule,
+            message: `The Verilog module name must exactly match the filename without .v (${expectedModule}).`,
+            expected: expectedModule,
+            actual: moduleMatch?.[1] || ''
+        });
+        ['d1', 'd2'].forEach(input => checks.push({
+            id: `verilog-input-${input}`,
+            valid: declarationContains(source, 'input', input),
+            message: `The Verilog module must declare ${input} as an input.`
+        }));
+        LAB_2_VERILOG_OUTPUTS.forEach(output => {
+            checks.push({
+                id: `verilog-output-${output.toLowerCase()}`,
+                valid: declarationContains(source, 'output', output),
+                message: `The Verilog module must declare ${output} as an output.`
+            });
+            checks.push({
+                id: `verilog-logic-${output.toLowerCase()}`,
+                valid: outputHasLogic(source, output),
+                message: `The Verilog source must provide logic for ${output}.`
+            });
+        });
+        return checks;
+    }
+
     function lab2CompatibilityChecks(data, submissionPackage = null) {
         const logicElements = text(responseValue(data, 'board-logic-elements'));
         const sensor = text(responseValue(data, 'board-sensor'));
         const projectName = text(responseValue(data, 'quartus-project-name'));
-        const verilogFilename = evidenceFilename(data, 'verilog-file', submissionPackage);
+        const verification = text(responseValue(data, 'verilog-verification'));
         const sensorNamesDevice = /adxl\s*-?\s*345/i.test(sensor);
         const sensorDescribesPurpose = /(three|3)[\s-]*axis|acceler|\bx\b.*\by\b.*\bz\b|motion|orientation|tilt|gravity/i.test(sensor);
-        return [
+        const verificationHasCoverage = /00[\s\S]*01[\s\S]*10[\s\S]*11/i.test(verification) || /(?:all|each|every)\s+(?:(?:four|4)\s+)?(?:input\s+)?(?:combinations?|cases?|settings?)/i.test(verification);
+        const verificationHasResult = /match|same|identical|pass|worked|correct|differ|mismatch|fail|did\s+not|does\s+not|yes|no/i.test(verification);
+        const checks = [
             {
                 id: 'board-logic-elements',
                 valid: logicElements.replace(/\D/g, '') === '22320',
@@ -196,22 +282,44 @@
                 id: 'quartus-project-name',
                 valid: projectName.replace(/\s+/g, '').toLowerCase() === 'lab2',
                 message: 'Quartus project name and top-level entity should be Lab2; capitalization differences are accepted.'
-            },
-            {
-                id: 'verilog-file',
-                valid: Boolean(verilogFilename) && /\.v$/i.test(verilogFilename),
-                message: 'The uploaded Verilog design filename must end in .v.',
-                filename: verilogFilename
             }
         ];
+        LAB_2_VERILOG_DIP_IDS.forEach(id => checks.push({
+            id,
+            valid: text(responseValue(data, id)) !== '',
+            message: `${id} must record the observed LED0, LED1, and LED2 states.`
+        }));
+        checks.push({
+            id: 'verilog-circuit-recreated',
+            valid: responseValue(data, 'verilog-circuit-recreated') === true,
+            message: 'verilog-circuit-recreated must be confirmed.'
+        });
+        checks.push({
+            id: 'output-buffers',
+            valid: text(responseValue(data, 'output-buffers')) !== '',
+            message: 'output-buffers must be present and non-empty.'
+        });
+        checks.push({
+            id: 'verilog-verification',
+            valid: Boolean(verification && verificationHasCoverage && verificationHasResult),
+            message: 'verilog-verification must state whether the Verilog implementation matched the earlier schematic for all four input combinations.'
+        });
+        ['rtl-capture', 'verilog-board'].forEach(id => checks.push({
+            id,
+            valid: evidenceProvided(data, id, submissionPackage),
+            message: `${id} evidence is required.`
+        }));
+        return [...checks, ...lab2VerilogChecks(data, submissionPackage)];
     }
 
     function validateLab2Compatibility(data, submissionPackage, errors) {
         const stages = new Set(gradedCheckpoints(data).map(checkpointStage));
         const missingStages = LAB_2_GRADED_STAGE_NUMBERS.filter(stage => !stages.has(stage));
         if (missingStages.length) errors.push(`Lab 2 checkpoint data must contain stages 0 through 9. Missing: ${missingStages.join(', ')}.`);
-        const verilogCheck = lab2CompatibilityChecks(data, submissionPackage).find(check => check.id === 'verilog-file');
-        if (verilogCheck.filename && !verilogCheck.valid) errors.push(`${verilogCheck.message} Received: ${verilogCheck.filename}.`);
+        const verilogChecks = lab2VerilogChecks(data, submissionPackage);
+        const fileCheck = verilogChecks.find(check => check.id === 'verilog-file');
+        if (fileCheck.filename && !fileCheck.valid) errors.push(`${fileCheck.message} Received: ${fileCheck.filename}.`);
+        if (fileCheck.valid) verilogChecks.filter(check => check.id !== 'verilog-file' && !check.valid).forEach(check => errors.push(check.message));
     }
 
     function validateCompletion(data, options = {}) {
@@ -379,8 +487,8 @@
         });
     }
 
-    function scoreLab2Validation(category, data) {
-        const checks = lab2CompatibilityChecks(data);
+    function scoreLab2Validation(category, data, submissionPackage) {
+        const checks = lab2CompatibilityChecks(data, submissionPackage);
         const passed = checks.filter(check => check.valid).length;
         return categoryResult(category, category.points * (passed / checks.length), `${passed}/${checks.length} Lab 2 reference, project-name, and Verilog-file checks passed.`, {
             passed,
@@ -421,11 +529,11 @@
         return categoryResult(category, category.points * (complete / relevant.length), `${complete}/${relevant.length} reflection or evidence items are present.`, { complete, total: relevant.length });
     }
 
-    function scoreCategory(category, data, integrity) {
+    function scoreCategory(category, data, integrity, submissionPackage = null) {
         if (category.method === 'required_checkpoints_complete') return scoreCompletion(category, data);
         if (category.method === 'knowledge_check_pass_rate' || category.method === 'auto_check_pass_rate') return scoreAutoChecks(category, data);
         if (category.method === 'lab2_gate_outputs') return scoreLab2GateOutputs(category, data);
-        if (category.method === 'lab2_validation_quality') return scoreLab2Validation(category, data);
+        if (category.method === 'lab2_validation_quality') return scoreLab2Validation(category, data, submissionPackage);
         if (category.method === 'required_response_presence' || category.method === 'response_presence') return scoreResponsePresence(category, data);
         if (category.method === 'validation_statuses' || category.method === 'validation_quality') return scoreValidation(category, data, integrity);
         if (category.method === 'final_checkpoint_completion' || category.method === 'submission_readiness') return scoreSubmissionReadiness(category, data, integrity);
@@ -438,7 +546,7 @@
         if (!items.some(existing => existing.key === key)) items.push({ ...item, key });
     }
 
-    function collectReviewItems(data, validation, integrity) {
+    function collectReviewItems(data, validation, integrity, submissionPackage = null) {
         const items = [];
         validation.errors.forEach(message => addReviewItem(items, { category: 'semi_automatic', severity: 'high', type: 'invalid_file', message }));
         validation.warnings.forEach(message => addReviewItem(items, { category: 'semi_automatic', severity: 'warning', type: 'metadata', message }));
@@ -446,7 +554,7 @@
         if (integrity.status === 'not_verified') addReviewItem(items, { category: 'semi_automatic', severity: 'warning', type: 'hash_not_verified', message: integrity.message });
 
         if (is3de3Lab2(data)) {
-            lab2CompatibilityChecks(data).filter(check => !check.valid).forEach(check => {
+            lab2CompatibilityChecks(data, submissionPackage).filter(check => !check.valid).forEach(check => {
                 addReviewItem(items, {
                     category: 'semi_automatic', severity: 'warning', type: 'lab2_compatibility', field_id: check.id,
                     message: check.message
@@ -551,11 +659,11 @@
             ? globalThis.LAB_GRADING_RULES?.['3de3']?.[currentLabNumber] || globalThis.LAB_GRADING_RULES?.generic
             : globalThis.LAB_GRADING_RULES?.[currentLabNumber] || globalThis.LAB_GRADING_RULES?.generic;
         const categories = validation.valid && rules
-            ? rules.categories.map(category => scoreCategory(category, data, integrity))
+            ? rules.categories.map(category => scoreCategory(category, data, integrity, options.submission_package))
             : [];
         const autogradedScore = round(categories.reduce((sum, category) => sum + category.points_earned, 0));
         const possibleScore = round(categories.reduce((sum, category) => sum + category.points_possible, 0));
-        const reviewItems = collectReviewItems(data || {}, validation, integrity);
+        const reviewItems = collectReviewItems(data || {}, validation, integrity, options.submission_package);
         const overrideKey = baseOverrideKey(data || {}, options.file_name || '');
         const override = readOverride(overrideKey);
         const status = reportStatus(data || {}, validation, integrity, reviewItems);
@@ -951,7 +1059,7 @@
 
     function inferFileType(name) {
         const extension = name.toLowerCase().split('.').pop();
-        return ({ json: 'JSON', vi: 'LabVIEW VI', png: 'PNG image', jpg: 'JPEG image', jpeg: 'JPEG image', gif: 'GIF image', webp: 'WebP image', pdf: 'PDF', txt: 'Text' })[extension] || 'File';
+        return ({ json: 'JSON', vi: 'LabVIEW VI', v: 'Verilog source', png: 'PNG image', jpg: 'JPEG image', jpeg: 'JPEG image', gif: 'GIF image', webp: 'WebP image', pdf: 'PDF', txt: 'Text' })[extension] || 'File';
     }
 
     function packageEntry(name, sizeBytes, compression = 'None') {
@@ -1051,6 +1159,19 @@
             for (let index = 0; index < archive.entries.length; index += 1) {
                 const archiveEntry = archive.entries[index];
                 const packageItem = submissionPackage.entries[index];
+                const normalizedName = packageItem.name.toLowerCase().replace(/\\/g, '/');
+                if (normalizedName.startsWith('evidence/verilog-file-') && /\.v$/i.test(normalizedName)) {
+                    try {
+                        const sourceBytes = await extractZipEntry(archive, archiveEntry, MAX_VERILOG_SOURCE_BYTES);
+                        Object.defineProperty(packageItem, 'source_text', {
+                            value: new TextDecoder('utf-8', { fatal: true }).decode(sourceBytes),
+                            enumerable: false,
+                            configurable: true
+                        });
+                    } catch (error) {
+                        packageItem.source_error = error?.message || 'Verilog source could not be read';
+                    }
+                }
                 if (packageItem.type !== 'PNG image') continue;
                 if (archiveEntry.uncompressedSize > MAX_PNG_PREVIEW_BYTES) {
                     packageItem.preview_error = 'PNG exceeds the 20 MB preview limit';

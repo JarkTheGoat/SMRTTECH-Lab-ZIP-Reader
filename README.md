@@ -11,6 +11,7 @@ A static browser tool for reading SMRTTECH 3CC3 and 3DE3 lab submission ZIP pack
 - Recognizes complete and partial lab submissions.
 - Applies the revised 3DE3 Lab 2 rubric to the ten graded stages 0-9, while allowing stage 10 as a non-graded export-only UI stage.
 - Grades Lab 2 NAND/XOR/XNOR outputs, board references, project naming, and `.v` evidence without requiring a final-review confirmation.
+- Reads the final Lab 2 `.v` source locally from the ZIP to verify its module name, `d1`/`d2` inputs, `LED0`-`LED7` outputs, and output logic; source text is not included in downloaded reports.
 
 ## Privacy
 
