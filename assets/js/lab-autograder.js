@@ -170,8 +170,7 @@
     }
 
     function evidenceFilename(data, key, submissionPackage = null) {
-        const prefix = `evidence/${key.toLowerCase()}-`;
-        const packaged = asArray(submissionPackage?.entries).find(entry => text(entry.name).toLowerCase().replace(/\\/g, '/').startsWith(prefix));
+        const packaged = packagedEvidenceEntry(submissionPackage, key);
         if (packaged) return text(packaged.name).replace(/\\/g, '/').split('/').pop().slice(key.length + 1);
         const record = flattenEvidence(data).find(({ evidence }) => text(evidence.id || evidence.key) === key)?.evidence;
         return text(record?.filename);
@@ -184,8 +183,8 @@
     }
 
     function packagedEvidenceEntry(submissionPackage, key) {
-        const prefix = `evidence/${key.toLowerCase()}-`;
-        return asArray(submissionPackage?.entries).find(entry => text(entry.name).toLowerCase().replace(/\\/g, '/').startsWith(prefix));
+        const prefixes = [key.toLowerCase(), key.toLowerCase().replace(/-/g, '_')].map(value => `evidence/${value}-`);
+        return asArray(submissionPackage?.entries).find(entry => prefixes.some(prefix => text(entry.name).toLowerCase().replace(/\\/g, '/').startsWith(prefix)));
     }
 
     function stripVerilogComments(source) {
@@ -1160,7 +1159,7 @@
                 const archiveEntry = archive.entries[index];
                 const packageItem = submissionPackage.entries[index];
                 const normalizedName = packageItem.name.toLowerCase().replace(/\\/g, '/');
-                if (normalizedName.startsWith('evidence/verilog-file-') && /\.v$/i.test(normalizedName)) {
+                if (/^evidence\/verilog[-_]file-/.test(normalizedName) && /\.v$/i.test(normalizedName)) {
                     try {
                         const sourceBytes = await extractZipEntry(archive, archiveEntry, MAX_VERILOG_SOURCE_BYTES);
                         Object.defineProperty(packageItem, 'source_text', {

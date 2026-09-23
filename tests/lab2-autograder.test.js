@@ -338,6 +338,20 @@ test('reads and validates a complete Verilog design directly from the uploaded Z
     assert.equal(JSON.stringify(report).includes(source), false);
 });
 
+test('reads Verilog evidence packaged with the manual’s underscore key', async () => {
+    const source = validVerilog();
+    const zip = storedZip({
+        'completion.json': JSON.stringify(validLab2()),
+        'evidence/verilog_file-student_design.v': source
+    });
+    const report = await autograder.parseSubmissionFile(new File([zip], '3DE3_Lab02_Submission.zip', { type: 'application/zip' }));
+
+    assert.equal(report.schema_validation.valid, true);
+    assert.equal(report.status, 'Ready for gradebook');
+    assert.equal(report.review_items.some(item => item.field_id === 'verilog-source-readable'), false);
+    assert.equal(JSON.stringify(report).includes(source), false);
+});
+
 test('rejects a Lab 2 record that is missing one of stages 0 through 9', async () => {
     const data = validLab2({ checkpoints: validLab2().checkpoints.filter(item => item.stage !== 8) });
     const report = await gradeLab2(data);
