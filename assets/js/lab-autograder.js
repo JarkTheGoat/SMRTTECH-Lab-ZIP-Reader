@@ -6,6 +6,8 @@
     const MAX_ARCHIVE_BYTES = 250 * 1024 * 1024;
     const MAX_ARCHIVE_ENTRIES = 500;
     const MAX_COMPLETION_BYTES = 10 * 1024 * 1024;
+    const MAX_BATCH_INDEX_BYTES = 2 * 1024 * 1024;
+    const MAX_BATCH_UNCOMPRESSED_BYTES = 500 * 1024 * 1024;
     const MAX_VERILOG_SOURCE_BYTES = 2 * 1024 * 1024;
     const MAX_PNG_PREVIEW_BYTES = 20 * 1024 * 1024;
     const MAX_TOTAL_PREVIEW_BYTES = 60 * 1024 * 1024;
@@ -25,6 +27,8 @@
         ...['or', 'nand', 'nor', 'xor', 'xnor'].flatMap(gate => [0, 1, 2, 3].map(index => `${gate}-led-${index}`))
     ]);
     const reports = [];
+    let selectedReportIndex = 0;
+    let overviewFilter = '';
 
     function asArray(value) {
         return Array.isArray(value) ? value : [];
@@ -704,7 +708,9 @@
 
     function csvEscape(value) {
         const string = value === null || value === undefined ? '' : String(value);
-        return /[",\n]/.test(string) ? `"${string.replace(/"/g, '""')}"` : string;
+        const safe = typeof value === 'string' && /^\s*[=+@-]/.test(string) && !/^\s*-?\d+(?:\.\d+)?\s*$/.test(string)
+            ? `'${string}` : string;
+        return /[",\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
     }
 
     function reportToGradebookRow(report) {
@@ -712,7 +718,13 @@
         const warnings = report.review_items.filter(item => item.severity === 'warning' || item.severity === 'review').length;
         const high = report.review_items.filter(item => item.severity === 'high').length;
         return {
+            batch_archive: report.batch?.archive_name || '',
+            batch_entry: report.batch?.entry_name || '',
+            batch_submission_id: report.batch?.submission_id || '',
+            roster_position: report.batch?.roster_position || '',
+            roster_names: asArray(report.batch?.roster_names).join(' | '),
             file_name: report.file_name,
+            report_status: report.status,
             schema_version: data.schema_version || '',
             lab_number: report.lab.lab_number || '',
             lab_title: report.lab.lab_title || '',
@@ -735,7 +747,7 @@
             manual_adjustment: report.override.manual_adjustment,
             instructor_comment: report.override.instructor_comment,
             final_approved_score: report.override.final_approved_score ?? '',
-            final_score: finalScore(report),
+            final_score: report.schema_validation.valid ? finalScore(report) : '',
             generated_at: report.generated_at,
             exported_at: report.lab.export_generated_at || ''
         };
@@ -744,7 +756,8 @@
     function gradebookCsv(items) {
         const rows = items.map(reportToGradebookRow);
         const columns = [
-            'file_name', 'schema_version', 'lab_number', 'lab_title', 'student_name_or_team', 'student_numbers', 'group_number',
+            'batch_archive', 'batch_entry', 'batch_submission_id', 'roster_position', 'roster_names',
+            'file_name', 'report_status', 'schema_version', 'lab_number', 'lab_title', 'student_name_or_team', 'student_numbers', 'group_number',
             'lab_section', 'instructor_or_ta', 'completion_status', 'completion_percent', 'hash_status', 'autograded_score',
             'possible_score', 'percentage', 'grading_rule_set', 'instructor_review_required', 'high_severity_flags', 'warning_flags',
             'missing_required_checkpoints', 'manual_adjustment', 'instructor_comment', 'final_approved_score', 'final_score', 'generated_at', 'exported_at'
@@ -959,6 +972,9 @@
         identity.append(createElement('p', 'autograder-report-eyebrow', `Lab ${report.lab.lab_number || 'unknown'} completion`));
         identity.append(createElement('h2', 'autograder-report-title', report.student.name_or_team || 'Unidentified student or team'));
         identity.append(createElement('p', 'autograder-report-meta', `${report.student.student_numbers || report.student.group_number || 'No student number or group'} | ${report.student.lab_section || 'No lab section'} | ${report.file_name}`));
+        if (report.batch) {
+            identity.append(createElement('p', 'autograder-report-meta', `Batch: ${report.batch.archive_name} | Submission ID: ${report.batch.submission_id || 'not supplied'} | Roster: ${report.batch.roster_position ? `#${report.batch.roster_position}` : 'unmatched'}`));
+        }
         heading.append(identity, createBadge(report.status));
         card.appendChild(heading);
 
@@ -1024,6 +1040,59 @@
         });
     }
 
+    function renderResultsOverview() {
+        const overview = createElement('section', 'autograder-overview');
+        const ready = reports.filter(report => report.status === 'Ready for gradebook').length;
+        const invalid = reports.filter(report => report.status === 'Invalid file').length;
+        overview.append(createElement('h3', '', 'Submission overview'));
+        overview.append(createElement('p', 'autograder-overview-count', `${reports.length} files · ${ready} ready · ${invalid} invalid · ${reports.length - ready - invalid} need review or are incomplete`));
+        [...new Set(reports.map(report => report.batch?.roster_warning).filter(Boolean))].forEach(warning => {
+            overview.append(createElement('p', 'autograder-alert', warning));
+        });
+        const search = createElement('input', 'autograder-overview-search');
+        search.type = 'search';
+        search.value = overviewFilter;
+        search.placeholder = 'Find a student, roster name, section, filename, or submission ID';
+        search.setAttribute('aria-label', 'Filter submission results');
+        const rows = reports.map((report, index) => {
+            const row = document.createElement('tr');
+            if (index === selectedReportIndex) row.className = 'is-selected';
+            appendCell(row, report.batch?.roster_position || '—', 'numeric');
+            appendCell(row, asArray(report.batch?.roster_names).join(' / ') || '—');
+            appendCell(row, report.student.name_or_team || 'Unidentified');
+            appendCell(row, report.batch?.submission_id || '—');
+            appendCell(row, report.student.lab_section || '—');
+            appendCell(row, report.lab.lab_number ? `Lab ${report.lab.lab_number}` : '—');
+            const statusCell = document.createElement('td');
+            statusCell.appendChild(createBadge(report.status));
+            row.appendChild(statusCell);
+            appendCell(row, report.schema_validation.valid ? `${finalScore(report)}/${report.possible_score}` : '—', 'numeric');
+            appendCell(row, report.batch?.archive_name || 'Direct upload', 'autograder-package-name');
+            appendCell(row, report.batch?.entry_name || report.file_name, 'autograder-package-name');
+            const actionCell = document.createElement('td');
+            const button = createElement('button', 'utility-button', index === selectedReportIndex ? 'Viewing' : 'View report');
+            button.type = 'button';
+            button.addEventListener('click', () => {
+                selectedReportIndex = index;
+                renderResults();
+            });
+            actionCell.appendChild(button);
+            row.appendChild(actionCell);
+            return row;
+        });
+        search.addEventListener('input', () => {
+            overviewFilter = search.value;
+            const query = text(overviewFilter).toLowerCase();
+            rows.forEach(row => { row.hidden = Boolean(query) && !row.textContent.toLowerCase().includes(query); });
+        });
+        if (overviewFilter) {
+            const query = text(overviewFilter).toLowerCase();
+            rows.forEach(row => { row.hidden = !row.textContent.toLowerCase().includes(query); });
+        }
+        overview.append(search, detailTable('autograder-overview-table', ['Roster #', 'Roster name(s)', 'Student/team in ZIP', 'Submission ID', 'Section', 'Lab', 'Status', 'Score', 'Source batch', 'Archive entry', 'Details'], rows));
+        return overview;
+    }
+
     function renderResults() {
         const container = document.querySelector('[data-autograder-results]');
         if (!container) return;
@@ -1031,7 +1100,9 @@
         if (!reports.length) {
             container.append(createElement('p', 'autograder-empty-state', 'Upload one or more submission ZIP packages or completion JSON files to generate instructor grading reports.'));
         } else {
-            reports.forEach(report => container.appendChild(renderReport(report)));
+            selectedReportIndex = clamp(selectedReportIndex, 0, reports.length - 1);
+            if (reports.length > 1) container.appendChild(renderResultsOverview());
+            container.appendChild(renderReport(reports[selectedReportIndex]));
         }
         updateBatchControls();
     }
@@ -1132,10 +1203,29 @@
         const end = start + entry.compressedSize;
         if (end > bytes.length) throw new Error('The completion record is truncated.');
         const compressed = bytes.slice(start, end);
-        if (entry.method === 0) return compressed;
+        if (entry.method === 0) {
+            if (compressed.length !== entry.uncompressedSize) throw new Error('The ZIP entry size does not match its directory.');
+            return compressed;
+        }
         if (entry.method === 8 && typeof DecompressionStream === 'function') {
-            const response = new Response(new Blob([compressed]).stream().pipeThrough(new DecompressionStream('deflate-raw')));
-            return new Uint8Array(await response.arrayBuffer());
+            const reader = new Blob([compressed]).stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader();
+            const chunks = [];
+            let total = 0;
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                total += value.length;
+                if (total > maximumBytes) {
+                    await reader.cancel();
+                    throw new Error(`The ZIP entry exceeds the ${formatBytes(maximumBytes)} safety limit.`);
+                }
+                chunks.push(value);
+            }
+            if (total !== entry.uncompressedSize) throw new Error('The ZIP entry size does not match its directory.');
+            const result = new Uint8Array(total);
+            let position = 0;
+            for (const chunk of chunks) { result.set(chunk, position); position += chunk.length; }
+            return result;
         }
         throw new Error(`ZIP compression method ${entry.method} is not supported by this browser.`);
     }
@@ -1198,6 +1288,121 @@
         }
     }
 
+    function decodeRosterText(value) {
+        const entities = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+        return text(String(value).replace(/&(#(?:x[0-9a-f]+|\d+)|amp|lt|gt|quot|apos|nbsp);/gi, (match, entity) => {
+            if (entity[0] !== '#') return entities[entity.toLowerCase()] ?? match;
+            const code = entity[1].toLowerCase() === 'x' ? parseInt(entity.slice(2), 16) : parseInt(entity.slice(1), 10);
+            return code > 0 && code <= 0x10FFFF ? String.fromCodePoint(code) : match;
+        }));
+    }
+
+    function parseBatchRoster(indexHtml) {
+        const names = [];
+        const rowPattern = /<tr\b([^>]*)>([\s\S]*?)<\/tr>/gi;
+        let match;
+        while ((match = rowPattern.exec(indexHtml))) {
+            if (!/\bbgcolor\s*=\s*["']?#aaaaaa\b/i.test(match[1])) continue;
+            const heading = match[2].match(/<b\b[^>]*>([^<]+)<\/b>/i);
+            const name = decodeRosterText(heading?.[1] || '');
+            if (name && !names.includes(name)) names.push(name);
+        }
+        return names;
+    }
+
+    function rosterWords(value) {
+        return ` ${String(value || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `;
+    }
+
+    function rosterMatchesForEntry(roster, entryName, report) {
+        const sources = [entryName, report.student.name_or_team || report.student.student_names].map(rosterWords);
+        return roster.flatMap((name, index) => {
+            const [family, given = ''] = name.split(/,\s*/, 2);
+            const first = given.trim().split(/\s+/)[0];
+            if (!family || !first || !sources.some(source => source.includes(rosterWords(family)) && source.includes(rosterWords(first)))) return [];
+            return [{ name, position: index + 1 }];
+        });
+    }
+
+    async function parseBatchZipFile(file, archive = null, onProgress = null) {
+        if (file.size > MAX_ARCHIVE_BYTES) return [invalidFileReport(file.name, 'The batch ZIP exceeds the 250 MB safety limit.')];
+        try {
+            const outer = archive || readZipDirectory(await file.arrayBuffer());
+            const totalBytes = outer.entries.reduce((sum, entry) => sum + entry.uncompressedSize, 0);
+            if (totalBytes > MAX_BATCH_UNCOMPRESSED_BYTES) return [invalidFileReport(file.name, 'The batch ZIP exceeds the 500 MB extracted-size safety limit.')];
+            const indexEntry = outer.entries.find(entry => entry.name.replace(/\\/g, '/').toLowerCase() === 'index.html');
+            let roster = [];
+            let indexWarning = '';
+            if (indexEntry) {
+                try {
+                    roster = parseBatchRoster(new TextDecoder('utf-8').decode(await extractZipEntry(outer, indexEntry, MAX_BATCH_INDEX_BYTES)));
+                    if (!roster.length) indexWarning = 'The batch index.html contains no recognizable roster names; archive order is shown.';
+                } catch (error) {
+                    indexWarning = `The batch roster could not be read: ${error.message}`;
+                }
+            } else {
+                indexWarning = 'No index.html roster was included; archive order is shown.';
+            }
+            const submissionEntries = outer.entries.filter(entry => entry !== indexEntry);
+            if (!submissionEntries.length) return [invalidFileReport(file.name, 'The batch ZIP contains no submission files.')];
+            const results = [];
+            let extractedBytes = 0;
+            for (const [entryOrder, entry] of submissionEntries.entries()) {
+                const name = entry.name.replace(/\\/g, '/');
+                const basename = name.split('/').pop();
+                let report;
+                if (!/\.zip$/i.test(basename)) {
+                    report = invalidFileReport(name, 'This batch entry is not a student submission ZIP. Review the original file manually.');
+                } else if (entry.uncompressedSize > MAX_ARCHIVE_BYTES) {
+                    report = invalidFileReport(name, 'This submission ZIP exceeds the 250 MB safety limit.');
+                } else if (extractedBytes + entry.uncompressedSize > MAX_BATCH_UNCOMPRESSED_BYTES) {
+                    report = invalidFileReport(name, 'The batch extracted-size safety limit was reached before this submission could be read.');
+                } else {
+                    try {
+                        const bytes = await extractZipEntry(outer, entry, MAX_ARCHIVE_BYTES);
+                        extractedBytes += bytes.length;
+                        report = await parseZipFile(new File([bytes], basename, { type: 'application/zip' }));
+                        report.file_name = name;
+                    } catch (error) {
+                        report = invalidFileReport(name, `This batch entry could not be opened as a submission ZIP: ${error.message}`);
+                    }
+                }
+                const matched = rosterMatchesForEntry(roster, name, report);
+                report.batch = {
+                    archive_name: file.name,
+                    entry_name: name,
+                    submission_id: basename.match(/^(\d+)[-_]/)?.[1] || '',
+                    roster_position: matched[0]?.position || null,
+                    roster_names: matched.map(item => item.name),
+                    roster_warning: indexWarning,
+                    entry_order: entryOrder + 1
+                };
+                results.push(report);
+                if (typeof onProgress === 'function') onProgress(results.length, submissionEntries.length);
+            }
+            results.sort((a, b) => (a.batch.roster_position ?? Infinity) - (b.batch.roster_position ?? Infinity) || a.batch.entry_order - b.batch.entry_order);
+            return results;
+        } catch (error) {
+            return [invalidFileReport(file.name, error?.message || 'The batch ZIP could not be read.')];
+        }
+    }
+
+    async function parseUploadedFile(file, onProgress = null) {
+        if (/\.zip$/i.test(file.name) || ['application/zip', 'application/x-zip-compressed'].includes(file.type)) {
+            if (file.size > MAX_ARCHIVE_BYTES) return [invalidFileReport(file.name, 'The ZIP package exceeds the 250 MB safety limit.')];
+            try {
+                const archive = readZipDirectory(await file.arrayBuffer());
+                const hasCompletion = archive.entries.some(entry => entry.name.replace(/\\/g, '/').split('/').pop().toLowerCase() === 'completion.json');
+                const hasBatchContents = archive.entries.some(entry => /(?:^|\/)index\.html$|\.zip$/i.test(entry.name));
+                if (hasCompletion || !hasBatchContents) return [await parseZipFile(file)];
+                return parseBatchZipFile(file, archive, onProgress);
+            } catch (error) {
+                return [invalidFileReport(file.name, error?.message || 'The ZIP package could not be read.')];
+            }
+        }
+        return [await parseSubmissionFile(file)];
+    }
+
     async function parseSubmissionFile(file) {
         if (file.name.toLowerCase().endsWith('.zip') || ['application/zip', 'application/x-zip-compressed'].includes(file.type)) return parseZipFile(file);
         const submissionPackage = { format: 'JSON', archive_name: file.name, completion_entry: file.name, entry_count: 1, entries: [packageEntry(file.name, file.size)] };
@@ -1212,10 +1417,14 @@
         }
         const additions = [];
         for (const file of list) {
-            additions.push(await parseSubmissionFile(file));
+            setUploadMessage(`Reading ${file.name} locally…`, '');
+            additions.push(...await parseUploadedFile(file, (processed, total) => {
+                setUploadMessage(`Reading ${file.name}: ${processed}/${total} batch entries processed locally…`, '');
+            }));
         }
         reports.push(...additions);
-        setUploadMessage(`${additions.length} submission file${additions.length === 1 ? '' : 's'} processed locally in this browser.`, 'is-success');
+        const invalidCount = additions.filter(report => report.status === 'Invalid file').length;
+        setUploadMessage(`${additions.length} submission file${additions.length === 1 ? '' : 's'} processed locally. ${invalidCount} need manual file review.`, invalidCount === additions.length ? 'is-warning' : 'is-success');
         renderResults();
     }
 
@@ -1246,6 +1455,8 @@
         document.querySelector('[data-clear-results]')?.addEventListener('click', () => {
             releasePreviewUrls(reports);
             reports.length = 0;
+            selectedReportIndex = 0;
+            overviewFilter = '';
             if (input) input.value = '';
             setUploadMessage('Uploaded reports cleared from this page. Browser-local overrides remain available for the same student and lab.', '');
             renderResults();
@@ -1253,7 +1464,7 @@
         renderResults();
     }
 
-    const api = { validateCompletion, verifyExportHash, gradeCompletion, parseCompletionText, parseSubmissionFile, parseZipFile, readZipDirectory, instructorTextResponses, gradebookCsv, reportToGradebookRow };
+    const api = { validateCompletion, verifyExportHash, gradeCompletion, parseCompletionText, parseSubmissionFile, parseUploadedFile, parseBatchZipFile, parseZipFile, readZipDirectory, instructorTextResponses, gradebookCsv, reportToGradebookRow };
     globalThis.LabAutograder = api;
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', setupPage);

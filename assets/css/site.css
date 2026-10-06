@@ -1633,6 +1633,47 @@ details[data-gated-hint].is-locked summary {
     padding: 1rem;
 }
 
+.autograder-overview {
+    margin: 1rem 0;
+    border: 1px solid rgba(73, 89, 101, 0.16);
+    border-radius: 8px;
+    background: #FFFFFF;
+    padding: clamp(1rem, 2vw, 1.45rem);
+}
+
+.autograder-overview h3 {
+    margin: 0 0 0.25rem;
+}
+
+.autograder-overview-count {
+    margin: 0 0 0.8rem;
+    color: var(--mac-grey);
+}
+
+.autograder-overview-search {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 38rem;
+    margin-bottom: 0.9rem;
+    border: 1px solid rgba(73, 89, 101, 0.28);
+    border-radius: 7px;
+    padding: 0.65rem 0.8rem;
+    font: inherit;
+}
+
+.autograder-overview-table tbody tr.is-selected {
+    background: var(--mac-gold-20);
+}
+
+.autograder-overview-table td {
+    vertical-align: top;
+}
+
+.autograder-overview-table td[hidden],
+.autograder-overview-table tr[hidden] {
+    display: none;
+}
+
 .autograder-report-card {
     margin: 1rem 0;
     border: 1px solid rgba(73, 89, 101, 0.16);

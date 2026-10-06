@@ -14,7 +14,7 @@
             <div>
                 <p class="autograder-eyebrow">SMRTTECH 3CC3 + 3DE3 · Local browser utility</p>
                 <h1>SMRTTECH Lab ZIP Reader</h1>
-                <p class="autograder-intro">Open exported lab submission ZIP packages or standalone completion JSON files, inspect their contents, and generate grading reports.</p>
+                <p class="autograder-intro">Open one student submission or an instructor batch ZIP, inspect each result, and export a combined gradebook.</p>
             </div>
             <img src="assets/McMaster-logo.png" alt="McMaster University logo" class="autograder-logo">
         </div>
@@ -35,11 +35,11 @@
         <section class="autograder-upload-card" aria-labelledby="upload-title">
             <div>
                 <p class="autograder-eyebrow">Completion packages</p>
-                <h2 id="upload-title">Upload submission ZIP or completion JSON</h2>
-                    <p>ZIP packages are opened locally to read <code>completion.json</code> and list the included evidence. Both the <code>3cc3-lab-completion-v1</code> and <code>3de3-lab-completion-v1</code> schemas are supported.</p>
+                <h2 id="upload-title">Upload a student or section ZIP</h2>
+                    <p>Choose a student submission ZIP, an instructor batch ZIP containing many submissions, or a standalone completion JSON file. A batch <code>index.html</code> sets the roster order when available. Files are processed locally in your browser.</p>
             </div>
             <label class="autograder-dropzone" data-autograder-dropzone for="completion-files">
-                <span class="autograder-dropzone-title">Drop ZIP or JSON files here</span>
+                <span class="autograder-dropzone-title">Drop student or section ZIP files here</span>
                 <span class="autograder-dropzone-copy">or choose submission packages from this computer</span>
                 <span class="utility-button">Choose submission files</span>
                 <input id="completion-files" class="autograder-file-input" type="file" accept="application/zip,application/x-zip-compressed,.zip,application/json,.json" multiple data-autograder-input>
