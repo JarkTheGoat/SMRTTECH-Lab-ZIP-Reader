@@ -335,6 +335,8 @@ test('reads and validates a complete Verilog design directly from the uploaded Z
     assert.equal(report.schema_validation.valid, true);
     assert.equal(report.status, 'Ready for gradebook');
     assert.equal(validation.points_earned, validation.points_possible);
+    const verilog = report.submission_package.entries.find(entry => entry.name.endsWith('student_design.v'));
+    assert.equal(verilog.source_text, source);
     assert.equal(JSON.stringify(report).includes(source), false);
 });
 

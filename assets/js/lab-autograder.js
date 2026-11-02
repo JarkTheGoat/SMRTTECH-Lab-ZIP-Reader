@@ -9,7 +9,7 @@
     const MAX_BATCH_INDEX_BYTES = 2 * 1024 * 1024;
     const MAX_BATCH_UNCOMPRESSED_BYTES = 500 * 1024 * 1024;
     const MAX_VERILOG_SOURCE_BYTES = 2 * 1024 * 1024;
-    const MAX_PNG_PREVIEW_BYTES = 20 * 1024 * 1024;
+    const MAX_IMAGE_PREVIEW_BYTES = 20 * 1024 * 1024;
     const MAX_TOTAL_PREVIEW_BYTES = 60 * 1024 * 1024;
     // Lab 2 stage 10 is an optional export-only UI stage. Only stages 0-9 are graded.
     const LAB_2_GRADED_STAGE_NUMBERS = Object.freeze([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
@@ -920,10 +920,10 @@
             if (entry.preview_url) {
                 const details = document.createElement('details');
                 details.className = 'autograder-image-preview';
-                details.appendChild(createElement('summary', '', 'View PNG'));
+                details.appendChild(createElement('summary', '', `View ${entry.type === 'JPEG image' ? 'JPEG' : 'PNG'}`));
                 const image = document.createElement('img');
                 image.src = entry.preview_url;
-                image.alt = `PNG evidence preview: ${entry.name}`;
+                image.alt = `${entry.type} evidence preview: ${entry.name}`;
                 image.loading = 'lazy';
                 const openFull = createElement('a', 'autograder-preview-link', 'Open full size');
                 openFull.href = entry.preview_url;
@@ -931,10 +931,21 @@
                 openFull.rel = 'noopener';
                 details.append(image, openFull);
                 previewCell.appendChild(details);
+            } else if (typeof entry.source_text === 'string') {
+                const details = document.createElement('details');
+                details.className = 'autograder-source-preview';
+                details.appendChild(createElement('summary', '', 'View Verilog source'));
+                const code = createElement('code', '', entry.source_text);
+                const pre = createElement('pre', '', '');
+                pre.appendChild(code);
+                details.appendChild(pre);
+                previewCell.appendChild(details);
             } else if (entry.preview_error) {
                 previewCell.textContent = entry.preview_error;
+            } else if (entry.source_error) {
+                previewCell.textContent = entry.source_error;
             } else {
-                previewCell.textContent = entry.type === 'PNG image' ? 'Preview unavailable' : '—';
+                previewCell.textContent = ['PNG image', 'JPEG image', 'Verilog source'].includes(entry.type) ? 'Preview unavailable' : '—';
             }
             row.appendChild(previewCell);
             return row;
@@ -1248,8 +1259,7 @@
             for (let index = 0; index < archive.entries.length; index += 1) {
                 const archiveEntry = archive.entries[index];
                 const packageItem = submissionPackage.entries[index];
-                const normalizedName = packageItem.name.toLowerCase().replace(/\\/g, '/');
-                if (/^evidence\/verilog[-_]file-/.test(normalizedName) && /\.v$/i.test(normalizedName)) {
+                if (packageItem.type === 'Verilog source') {
                     try {
                         const sourceBytes = await extractZipEntry(archive, archiveEntry, MAX_VERILOG_SOURCE_BYTES);
                         Object.defineProperty(packageItem, 'source_text', {
@@ -1261,9 +1271,9 @@
                         packageItem.source_error = error?.message || 'Verilog source could not be read';
                     }
                 }
-                if (packageItem.type !== 'PNG image') continue;
-                if (archiveEntry.uncompressedSize > MAX_PNG_PREVIEW_BYTES) {
-                    packageItem.preview_error = 'PNG exceeds the 20 MB preview limit';
+                if (!['PNG image', 'JPEG image'].includes(packageItem.type)) continue;
+                if (archiveEntry.uncompressedSize > MAX_IMAGE_PREVIEW_BYTES) {
+                    packageItem.preview_error = `${packageItem.type} exceeds the 20 MB preview limit`;
                     continue;
                 }
                 if (previewBytes + archiveEntry.uncompressedSize > MAX_TOTAL_PREVIEW_BYTES) {
@@ -1271,15 +1281,16 @@
                     continue;
                 }
                 try {
-                    const imageBytes = await extractZipEntry(archive, archiveEntry, MAX_PNG_PREVIEW_BYTES);
+                    const imageBytes = await extractZipEntry(archive, archiveEntry, MAX_IMAGE_PREVIEW_BYTES);
                     previewBytes += imageBytes.length;
                     if (typeof URL?.createObjectURL === 'function') {
-                        Object.defineProperty(packageItem, 'preview_url', { value: URL.createObjectURL(new Blob([imageBytes], { type: 'image/png' })), enumerable: false, configurable: true });
+                        const mimeType = packageItem.type === 'JPEG image' ? 'image/jpeg' : 'image/png';
+                        Object.defineProperty(packageItem, 'preview_url', { value: URL.createObjectURL(new Blob([imageBytes], { type: mimeType })), enumerable: false, configurable: true });
                     } else {
-                        packageItem.preview_error = 'PNG previews are unavailable in this browser';
+                        packageItem.preview_error = 'Image previews are unavailable in this browser';
                     }
                 } catch (error) {
-                    packageItem.preview_error = error?.message || 'PNG preview could not be loaded';
+                    packageItem.preview_error = error?.message || 'Image preview could not be loaded';
                 }
             }
             return parseCompletionText(new TextDecoder('utf-8').decode(contents), file.name, submissionPackage);

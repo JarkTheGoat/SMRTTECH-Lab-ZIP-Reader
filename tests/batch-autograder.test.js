@@ -95,6 +95,25 @@ test('keeps a standalone student ZIP as one report', async () => {
     assert.equal(reports[0].batch, undefined);
 });
 
+test('prepares both JPEG filename variants for local image preview', async () => {
+    const jpegBytes = new Uint8Array([0xFF, 0xD8, 0xFF, 0xD9]);
+    const zip = storedZip({
+        'completion.json': JSON.stringify(completion('Image Student')),
+        'evidence/photo.jpg': jpegBytes,
+        'evidence/board.JPEG': jpegBytes
+    });
+    const report = await autograder.parseSubmissionFile(new File([zip], 'images.zip', { type: 'application/zip' }));
+    const images = report.submission_package.entries.filter(entry => entry.type === 'JPEG image');
+
+    assert.equal(images.length, 2);
+    for (const entry of images) {
+        assert.ok(entry.preview_url?.startsWith('blob:'));
+        assert.equal((await fetch(entry.preview_url)).headers.get('content-type'), 'image/jpeg');
+        assert.equal(JSON.stringify(entry).includes('blob:'), false);
+        URL.revokeObjectURL(entry.preview_url);
+    }
+});
+
 test('accepts 3CC3 records inside a batch and preserves Excel-safe names', async () => {
     const record = {
         schema_version: '3cc3-lab-completion-v1',

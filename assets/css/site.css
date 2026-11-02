@@ -2006,12 +2006,27 @@ details[data-gated-hint].is-locked summary {
     min-width: 260px;
 }
 
-.autograder-image-preview summary {
+.autograder-image-preview summary,
+.autograder-source-preview summary {
     width: max-content;
     color: var(--mac-maroon);
     font-weight: 850;
     text-decoration: underline;
     cursor: pointer;
+}
+
+.autograder-source-preview pre {
+    max-width: min(100%, 760px);
+    max-height: 26rem;
+    overflow: auto;
+    margin: 0.7rem 0 0;
+    border: 1px solid rgba(73, 89, 101, 0.2);
+    border-radius: 5px;
+    background: #F7F8FA;
+    padding: 0.8rem;
+    color: var(--lab-text);
+    font: 0.82rem/1.5 'Roboto Mono', ui-monospace, monospace;
+    white-space: pre;
 }
 
 .autograder-image-preview img {

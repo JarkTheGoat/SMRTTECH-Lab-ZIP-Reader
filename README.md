@@ -8,7 +8,7 @@ A static browser tool for reading SMRTTECH 3CC3 and 3DE3 lab submission ZIP pack
 - Reads ZIP packages locally in the browser.
 - Reads instructor batch ZIPs containing student ZIPs; uses an included `index.html` roster for display order when names can be matched.
 - Keeps each batch archive entry and numeric submission prefix with its report; unsupported and broken entries appear as individual import errors.
-- Lists packaged evidence and previews supported images.
+- Lists packaged evidence, previews PNG and JPEG images, and shows `.v` Verilog source as text.
 - Produces per-submission reports, a searchable batch overview, CSV gradebooks with batch identifiers, and detailed JSON reports.
 - Recognizes complete and partial lab submissions.
 - Applies the revised 3DE3 Lab 2 rubric to the ten graded stages 0-9, while allowing stage 10 as a non-graded export-only UI stage.
